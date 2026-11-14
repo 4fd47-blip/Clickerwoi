@@ -1,9 +1,8 @@
 package com.clickerwoi.app
 
 import android.accessibilityservice.AccessibilityService
-import android.accessibilityservice.GestureDescription
+import android.content.pm.PackageManager
 import android.graphics.Color
-import android.graphics.Path
 import android.graphics.PixelFormat
 import android.os.Handler
 import android.os.Looper
@@ -16,6 +15,8 @@ import android.view.accessibility.AccessibilityEvent
 import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.Toast
+import rikka.shizuku.Shizuku
+import java.util.Locale
 
 data class Titik(val x: Float, val y: Float, val t: Long)
 data class Aksi(val titik: List<Titik>, val jeda: Long)
@@ -35,6 +36,7 @@ class ClickService : AccessibilityService() {
     private var memutar = false
     private var ulang = false
     private var waktuTerakhir = 0L
+    private var proses: Process? = null
 
     override fun onServiceConnected() {
         wm = getSystemService(WINDOW_SERVICE) as WindowManager
@@ -46,11 +48,15 @@ class ClickService : AccessibilityService() {
     override fun onInterrupt() {}
 
     override fun onDestroy() {
+        proses?.destroy()
         handler.removeCallbacksAndMessages(null)
         perekam?.let { wm.removeView(it) }
         if (::panel.isInitialized) wm.removeView(panel)
         super.onDestroy()
     }
+
+    private fun toast(s: String) =
+        Toast.makeText(this, s, Toast.LENGTH_LONG).show()
 
     private fun tombol(teks: String, aksi: () -> Unit) = Button(this).apply {
         text = teks
@@ -126,8 +132,58 @@ class ClickService : AccessibilityService() {
             perekam = null
             merekam = false
             tRekam.text = "REKAM"
-            Toast.makeText(this, "Tersimpan: ${makro.size} aksi", Toast.LENGTH_SHORT).show()
+            toast("Tersimpan: ${makro.size} aksi")
         }
+    }
+
+    private fun siapShizuku(): Boolean {
+        if (!Shizuku.pingBinder()) {
+            toast("Shizuku belum aktif. Buka aplikasi Shizuku dan mulai dulu.")
+            return false
+        }
+        if (Shizuku.checkSelfPermission() != PackageManager.PERMISSION_GRANTED) {
+            Shizuku.requestPermission(1)
+            toast("Izinkan Clickerwoi di Shizuku, lalu tekan PUTAR lagi")
+            return false
+        }
+        return true
+    }
+
+    private fun shell(cmd: String): Process? {
+        return try {
+            val m = Shizuku::class.java.getDeclaredMethod(
+                "newProcess",
+                Array<String>::class.java,
+                Array<String>::class.java,
+                String::class.java
+            )
+            m.isAccessible = true
+            m.invoke(null, arrayOf("sh", "-c", cmd), null, null) as Process
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    private fun buatSkrip(): String {
+        val sb = StringBuilder()
+        if (ulang) sb.append("while true; do ")
+        makro.forEachIndexed { i, a ->
+            val awal = a.titik.first()
+            val akhir = a.titik.last()
+            val jeda = if (i == 0) 300L else a.jeda
+            val dur = maxOf(akhir.t, 50L)
+            sb.append("sleep ")
+                .append(String.format(Locale.US, "%.3f", jeda / 1000.0))
+                .append("; ")
+            sb.append("input swipe ")
+                .append(awal.x.toInt()).append(" ")
+                .append(awal.y.toInt()).append(" ")
+                .append(akhir.x.toInt()).append(" ")
+                .append(akhir.y.toInt()).append(" ")
+                .append(dur).append("; ")
+        }
+        if (ulang) sb.append("sleep 0.5; done")
+        return sb.toString()
     }
 
     private fun togglePutar() {
@@ -137,42 +193,28 @@ class ClickService : AccessibilityService() {
             return
         }
         if (makro.isEmpty()) {
-            Toast.makeText(this, "Rekam dulu", Toast.LENGTH_SHORT).show()
+            toast("Rekam dulu")
             return
         }
+        if (!siapShizuku()) return
+        val p = shell(buatSkrip())
+        if (p == null) {
+            toast("Gagal menjalankan lewat Shizuku")
+            return
+        }
+        proses = p
         memutar = true
         tPutar.text = "STOP"
-        jalankan(0)
+        Thread {
+            try { p.waitFor() } catch (e: Exception) {}
+            handler.post { if (proses === p) berhenti() }
+        }.start()
     }
 
     private fun berhenti() {
         memutar = false
-        handler.removeCallbacksAndMessages(null)
+        proses?.destroy()
+        proses = null
         tPutar.text = "PUTAR"
-    }
-
-    private fun jalankan(i: Int) {
-        if (!memutar) return
-        if (i >= makro.size) {
-            if (ulang) handler.postDelayed({ jalankan(0) }, 500) else berhenti()
-            return
-        }
-        val a = makro[i]
-        handler.postDelayed({
-            if (!memutar) return@postDelayed
-            val path = Path()
-            a.titik.forEachIndexed { n, t ->
-                if (n == 0) path.moveTo(t.x, t.y) else path.lineTo(t.x, t.y)
-            }
-            val dur = maxOf(a.titik.last().t, 50L)
-            val g = GestureDescription.Builder()
-                .addStroke(GestureDescription.StrokeDescription(path, 0, dur))
-                .build()
-            val ok = dispatchGesture(g, object : GestureResultCallback() {
-                override fun onCompleted(d: GestureDescription?) { jalankan(i + 1) }
-                override fun onCancelled(d: GestureDescription?) { jalankan(i + 1) }
-            }, null)
-            if (!ok) jalankan(i + 1)
-        }, if (i == 0) 300L else a.jeda)
     }
 }
