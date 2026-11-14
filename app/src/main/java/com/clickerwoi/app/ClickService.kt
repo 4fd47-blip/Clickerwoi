@@ -76,7 +76,7 @@ class ClickService : AccessibilityService() {
         panelLp = LP(
             LP.WRAP_CONTENT, LP.WRAP_CONTENT,
             LP.TYPE_ACCESSIBILITY_OVERLAY,
-            LP.FLAG_NOT_FOCUSABLE,
+            LP.FLAG_NOT_FOCUSABLE or LP.FLAG_SPLIT_TOUCH,
             PixelFormat.TRANSLUCENT
         ).apply { gravity = Gravity.START or Gravity.CENTER_VERTICAL }
         wm.addView(panel, panelLp)
