@@ -1,27 +1,34 @@
 package com.clickerwoi.app
 
-import android.accessibilityservice.AccessibilityService
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.Service
+import android.content.Intent
 import android.content.pm.PackageManager
+import android.content.pm.ServiceInfo
 import android.graphics.Color
 import android.graphics.PixelFormat
+import android.os.Build
 import android.os.Handler
+import android.os.IBinder
 import android.os.Looper
+import android.provider.Settings
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.View
 import android.view.WindowManager
 import android.view.WindowManager.LayoutParams as LP
-import android.view.accessibility.AccessibilityEvent
 import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.Toast
+import androidx.core.app.NotificationCompat
 import rikka.shizuku.Shizuku
 import java.util.Locale
 
 data class Titik(val x: Float, val y: Float, val t: Long)
 data class Aksi(val titik: List<Titik>, val jeda: Long)
 
-class ClickService : AccessibilityService() {
+class PanelService : Service() {
 
     private val handler = Handler(Looper.getMainLooper())
     private lateinit var wm: WindowManager
@@ -38,21 +45,47 @@ class ClickService : AccessibilityService() {
     private var waktuTerakhir = 0L
     private var proses: Process? = null
 
-    override fun onServiceConnected() {
+    override fun onBind(intent: Intent?): IBinder? = null
+
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int = START_STICKY
+
+    override fun onCreate() {
+        super.onCreate()
+        mulaiForeground()
+        if (!Settings.canDrawOverlays(this)) {
+            stopSelf()
+            return
+        }
         wm = getSystemService(WINDOW_SERVICE) as WindowManager
         buatPanel()
     }
 
-    override fun onAccessibilityEvent(event: AccessibilityEvent?) {}
-
-    override fun onInterrupt() {}
-
     override fun onDestroy() {
         proses?.destroy()
         handler.removeCallbacksAndMessages(null)
-        perekam?.let { wm.removeView(it) }
-        if (::panel.isInitialized) wm.removeView(panel)
+        if (::wm.isInitialized) {
+            perekam?.let { wm.removeView(it) }
+            if (::panel.isInitialized) wm.removeView(panel)
+        }
         super.onDestroy()
+    }
+
+    private fun mulaiForeground() {
+        if (Build.VERSION.SDK_INT >= 26) {
+            val ch = NotificationChannel("clickerwoi", "Clickerwoi", NotificationManager.IMPORTANCE_LOW)
+            getSystemService(NotificationManager::class.java).createNotificationChannel(ch)
+        }
+        val n = NotificationCompat.Builder(this, "clickerwoi")
+            .setContentTitle("Clickerwoi aktif")
+            .setContentText("Panel makro sedang tampil")
+            .setSmallIcon(android.R.drawable.ic_dialog_info)
+            .setOngoing(true)
+            .build()
+        if (Build.VERSION.SDK_INT >= 34) {
+            startForeground(1, n, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
+        } else {
+            startForeground(1, n)
+        }
     }
 
     private fun toast(s: String) =
@@ -76,12 +109,14 @@ class ClickService : AccessibilityService() {
             ulang = !ulang
             tUlang.text = if (ulang) "ULANG: HIDUP" else "ULANG: MATI"
         }
+        val tKeluar = tombol("KELUAR") { stopSelf() }
         panel.addView(tRekam)
         panel.addView(tPutar)
         panel.addView(tUlang)
+        panel.addView(tKeluar)
         panelLp = LP(
             LP.WRAP_CONTENT, LP.WRAP_CONTENT,
-            LP.TYPE_ACCESSIBILITY_OVERLAY,
+            LP.TYPE_APPLICATION_OVERLAY,
             LP.FLAG_NOT_FOCUSABLE or LP.FLAG_SPLIT_TOUCH,
             PixelFormat.TRANSLUCENT
         ).apply { gravity = Gravity.START or Gravity.CENTER_VERTICAL }
@@ -117,7 +152,7 @@ class ClickService : AccessibilityService() {
             v.setBackgroundColor(Color.argb(60, 255, 0, 0))
             val lp = LP(
                 LP.MATCH_PARENT, LP.MATCH_PARENT,
-                LP.TYPE_ACCESSIBILITY_OVERLAY,
+                LP.TYPE_APPLICATION_OVERLAY,
                 LP.FLAG_NOT_FOCUSABLE or LP.FLAG_LAYOUT_IN_SCREEN or LP.FLAG_LAYOUT_NO_LIMITS,
                 PixelFormat.TRANSLUCENT
             )
